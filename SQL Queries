@@ -1,10 +1,14 @@
--- Create database
-CREATE DATABASE IF NOT EXISTS walmartSales;
 
 
--- Create table
-CREATE TABLE IF NOT EXISTS sales(    
-	invoice_id VARCHAR(30) NOT NULL PRIMARY KEY,
+-- Create the database
+CREATE DATABASE walmart;
+
+-- Drop the table if it already exists to avoid conflicts
+DROP TABLE IF EXISTS sales;
+
+-- Create the sales table schema
+CREATE TABLE IF NOT EXISTS sales (
+    invoice_id VARCHAR(30) NOT NULL PRIMARY KEY,
     branch VARCHAR(5) NOT NULL,
     city VARCHAR(30) NOT NULL,
     customer_type VARCHAR(30) NOT NULL,
@@ -12,339 +16,274 @@ CREATE TABLE IF NOT EXISTS sales(
     product_line VARCHAR(100) NOT NULL,
     unit_price DECIMAL(10,2) NOT NULL,
     quantity INT NOT NULL,
-    tax_pct FLOAT(6,4) NOT NULL,
+    tax_pct NUMERIC(6,4) NOT NULL,
     total DECIMAL(12, 4) NOT NULL,
-    date DATETIME NOT NULL,
+    date TIMESTAMP NOT NULL, -- Using TIMESTAMP as in user's request
     time TIME NOT NULL,
     payment VARCHAR(15) NOT NULL,
     cogs DECIMAL(10,2) NOT NULL,
-    gross_margin_pct FLOAT(11,9),
+    gross_margin_pct NUMERIC(11,9),
     gross_income DECIMAL(12, 4),
-    rating FLOAT(2, 1)
+    rating NUMERIC(3, 1)
 );
 
--- Data cleaning
-SELECT
-	*
-FROM sales;
+
+-- == SECTION 2: DATA LOADING (PostgreSQL Specific)
 
 
--- Add the time_of_day column
-SELECT
-	time,
-	(CASE
-		WHEN `time` BETWEEN "00:00:00" AND "12:00:00" THEN "Morning"
-        WHEN `time` BETWEEN "12:01:00" AND "16:00:00" THEN "Afternoon"
-        ELSE "Evening"
-    END) AS time_of_day
-FROM sales;
+-- This COPY command is for PostgreSQL.
+-- You must update the file path 'D:\analyst\WalmartSalesData.csv'
+-- to the actual location of your CSV file on your server.
+-- MySQL users would use the 'LOAD DATA INFILE' command instead.
+
+COPY sales (Invoice_ID, Branch, City, Customer_type, Gender, Product_line, Unit_price, Quantity, tax_pct, Total, date, time, Payment, cogs, gross_margin_pct, gross_income, rating)
+FROM 'D:\analyst\WalmartSalesData.csv'
+WITH (FORMAT CSV, HEADER);
+
+-- After loading, check the data
+SELECT * FROM sales LIMIT 10;
 
 
+-- == SECTION 3: DATA CLEANING & FEATURE ENGINEERING
+
+
+-- 1. Add time_of_day column
 ALTER TABLE sales ADD COLUMN time_of_day VARCHAR(20);
 
--- For this to work turn off safe mode for update
--- Edit > Preferences > SQL Edito > scroll down and toggle safe mode
--- Reconnect to MySQL: Query > Reconnect to server
 UPDATE sales
 SET time_of_day = (
-	CASE
-		WHEN `time` BETWEEN "00:00:00" AND "12:00:00" THEN "Morning"
-        WHEN `time` BETWEEN "12:01:00" AND "16:00:00" THEN "Afternoon"
-        ELSE "Evening"
+    CASE
+        WHEN time BETWEEN '00:00:00' AND '12:00:00' THEN 'Morning'
+        WHEN time BETWEEN '12:01:00' AND '16:00:00' THEN 'Afternoon'
+        ELSE 'Evening'
     END
 );
 
-
--- Add day_name column
-SELECT
-	date,
-	DAYNAME(date)
-FROM sales;
-
+-- 2. Add day_name column
 ALTER TABLE sales ADD COLUMN day_name VARCHAR(10);
 
+-- Using PostgreSQL's TO_CHAR to extract the day name.
+-- (MySQL would use DAYNAME(date))
 UPDATE sales
-SET day_name = DAYNAME(date);
+SET day_name = TO_CHAR(date, 'Day');
 
-
--- Add month_name column
-SELECT
-	date,
-	MONTHNAME(date)
-FROM sales;
-
+-- 3. Add month_name column
 ALTER TABLE sales ADD COLUMN month_name VARCHAR(10);
 
+-- Using PostgreSQL's TO_CHAR to extract the month name.
+-- (MySQL would use MONTHNAME(date))
 UPDATE sales
-SET month_name = MONTHNAME(date);
+SET month_name = TO_CHAR(date, 'Month');
 
--- --------------------------------------------------------------------
--- ---------------------------- Generic ------------------------------
--- --------------------------------------------------------------------
--- How many unique cities does the data have?
-SELECT 
-	DISTINCT city
-FROM sales;
-
--- In which city is each branch?
-SELECT 
-	DISTINCT city,
-    branch
-FROM sales;
-
--- --------------------------------------------------------------------
--- ---------------------------- Product -------------------------------
--- --------------------------------------------------------------------
-
--- How many unique product lines does the data have?
-SELECT
-	DISTINCT product_line
-FROM sales;
-
-
--- What is the most selling product line
-SELECT
-	SUM(quantity) as qty,
-    product_line
+-- Check the new columns
+SELECT invoice_id, time_of_day, day_name, month_name
 FROM sales
-GROUP BY product_line
-ORDER BY qty DESC;
+LIMIT 5;
 
--- What is the most selling product line
+
+-- == SECTION 4: STRATEGIC ANALYSIS QUERIES
+
+
+
+-- == Category 1: Generic (Location & Operational Efficiency)
+
+
+-- Question 1.1: Benchmarking Branch Performance
+-- Which branch is the most efficient at generating profit?
 SELECT
-	SUM(quantity) as qty,
-    product_line
+    branch,
+    (SUM(gross_income) / SUM(total)) * 100 AS gross_profit_margin_pct
 FROM sales
-GROUP BY product_line
-ORDER BY qty DESC;
+GROUP BY branch
+ORDER BY gross_profit_margin_pct DESC;
 
--- What is the total revenue by month
+
+-- Question 1.2: City vs. Branch Consistency
+-- Does the highest-revenue city also have the highest average rating?
 SELECT
-	month_name AS month,
-	SUM(total) AS total_revenue
+    city,
+    branch,
+    SUM(total) AS total_revenue,
+    AVG(rating) AS avg_rating
 FROM sales
-GROUP BY month_name 
-ORDER BY total_revenue;
-
-
--- What month had the largest COGS?
-SELECT
-	month_name AS month,
-	SUM(cogs) AS cogs
-FROM sales
-GROUP BY month_name 
-ORDER BY cogs;
-
-
--- What product line had the largest revenue?
-SELECT
-	product_line,
-	SUM(total) as total_revenue
-FROM sales
-GROUP BY product_line
+GROUP BY city, branch
 ORDER BY total_revenue DESC;
 
--- What is the city with the largest revenue?
+
+-- Question 1.3: Sales Consistency (PostgreSQL Syntax)
+-- Which branch has the most volatile (least predictable) daily sales?
+-- (Note: MySQL would use STDDEV() instead of STDDEV_SAMP())
 SELECT
-	branch,
-	city,
-	SUM(total) AS total_revenue
-FROM sales
-GROUP BY city, branch 
-ORDER BY total_revenue;
+    branch,
+    STDDEV_SAMP(daily_total) / AVG(daily_total) AS coefficient_of_variation
+FROM (
+    SELECT
+        branch,
+        DATE(date) AS sale_date,
+        SUM(total) AS daily_total
+    FROM sales
+    GROUP BY branch, sale_date
+) AS daily_sales
+GROUP BY branch
+ORDER BY coefficient_of_variation DESC;
 
 
--- What product line had the largest VAT?
+
+-- == Category 2: Product (Profitability & Demand)
+
+
+-- Question 2.1: Product Line Profitability Deep Dive
+-- Which Product Line provides the highest contribution to Gross Income?
 SELECT
-	product_line,
-	AVG(tax_pct) as avg_tax
+    product_line,
+    SUM(gross_income) AS total_gross_income,
+    SUM(total) AS total_revenue
 FROM sales
 GROUP BY product_line
-ORDER BY avg_tax DESC;
+ORDER BY total_gross_income DESC
+LIMIT 3;
 
 
--- Fetch each product line and add a column to those product 
--- line showing "Good", "Bad". Good if its greater than average sales
-
-SELECT 
-	AVG(quantity) AS avg_qnty
-FROM sales;
-
+-- Question 2.2: Top Line by Basket Size
+-- What is the average quantity per transaction for the top 3 revenue-generating product lines?
+WITH TopProductLines AS (
+    SELECT
+        product_line,
+        SUM(total) AS total_revenue
+    FROM sales
+    GROUP BY product_line
+    ORDER BY total_revenue DESC
+    LIMIT 3
+)
 SELECT
-	product_line,
-	CASE
-		WHEN AVG(quantity) > 6 THEN "Good"
-        ELSE "Bad"
-    END AS remark
+    s.product_line,
+    AVG(s.quantity) AS avg_quantity_per_transaction
+FROM sales s
+JOIN TopProductLines tpl ON s.product_line = tpl.product_line
+GROUP BY s.product_line
+ORDER BY avg_quantity_per_transaction DESC;
+
+
+-- Question 2.3: VAT Impact on Top-Selling Products
+-- How do average VAT contributions differ between the top-selling (by quantity)
+-- and top-profit (by gross income) product lines?
+WITH ProductRanks AS (
+    SELECT
+        product_line,
+        SUM(quantity) AS total_quantity,
+        SUM(gross_income) AS total_profit
+    FROM sales
+    GROUP BY product_line
+),
+TopSelling AS (
+    SELECT product_line FROM ProductRanks ORDER BY total_quantity DESC LIMIT 1
+),
+TopProfit AS (
+    SELECT product_line FROM ProductRanks ORDER BY total_profit DESC LIMIT 1
+)
+SELECT
+    'Top Selling (by Qty)' AS category,
+    product_line,
+    AVG(tax_pct) AS avg_vat_pct
 FROM sales
+WHERE product_line = (SELECT product_line FROM TopSelling)
+GROUP BY product_line
+UNION ALL
+SELECT
+    'Top Profitable (by Income)' AS category,
+    product_line,
+    AVG(tax_pct) AS avg_vat_pct
+FROM sales
+WHERE product_line = (SELECT product_line FROM TopProfit)
 GROUP BY product_line;
 
 
--- Which branch sold more products than average product sold?
-SELECT 
-	branch, 
-    SUM(quantity) AS qnty
+
+-- == Category 3: Sales (Trend & Driver Analysis)
+
+
+-- Question 3.1: Revenue vs. Profit Seasonality
+-- Which month had the highest Total Revenue, and did it also yield the highest Gross Income?
+SELECT
+    month_name,
+    SUM(total) AS total_revenue,
+    SUM(gross_income) AS total_gross_income
 FROM sales
-GROUP BY branch
-HAVING SUM(quantity) > (SELECT AVG(quantity) FROM sales);
+GROUP BY month_name
+ORDER BY total_revenue DESC;
 
 
--- What is the most common product line by gender
+-- Question 3.2: Transaction Value Segmentation
+-- How does the Average Transaction Value (Total) compare between Morning, Afternoon, and Evening?
 SELECT
-	gender,
-    product_line,
-    COUNT(gender) AS total_cnt
+    time_of_day,
+    AVG(total) AS avg_transaction_value
 FROM sales
-GROUP BY gender, product_line
-ORDER BY total_cnt DESC;
+GROUP BY time_of_day
+ORDER BY avg_transaction_value DESC;
 
--- What is the average rating of each product line
+
+-- Question 3.3: Promotion Effectiveness (Implied)
+-- How does the Gross Profit Margin compare between 'Member' and 'Normal' customers?
 SELECT
-	ROUND(AVG(rating), 2) as avg_rating,
-    product_line
-FROM sales
-GROUP BY product_line
-ORDER BY avg_rating DESC;
-
--- --------------------------------------------------------------------
--- --------------------------------------------------------------------
-
--- --------------------------------------------------------------------
--- -------------------------- Customers -------------------------------
--- --------------------------------------------------------------------
-
--- How many unique customer types does the data have?
-SELECT
-	DISTINCT customer_type
-FROM sales;
-
--- How many unique payment methods does the data have?
-SELECT
-	DISTINCT payment
-FROM sales;
-
-
--- What is the most common customer type?
-SELECT
-	customer_type,
-	count(*) as count
-FROM sales
-GROUP BY customer_type
-ORDER BY count DESC;
-
--- Which customer type buys the most?
-SELECT
-	customer_type,
-    COUNT(*)
+    customer_type,
+    (SUM(gross_income) / SUM(total)) * 100 AS gross_profit_margin_pct
 FROM sales
 GROUP BY customer_type;
 
 
--- What is the gender of most of the customers?
+
+-- == Category 4: Customer (Behavioral & Loyalty Drivers)
+
+
+-- Question 4.1: Customer Value Comparison
+-- Do 'Member' or 'Normal' customers generate a higher Average Total Revenue per Visit?
 SELECT
-	gender,
-	COUNT(*) as gender_cnt
-FROM sales
-GROUP BY gender
-ORDER BY gender_cnt DESC;
-
--- What is the gender distribution per branch?
-SELECT
-	gender,
-	COUNT(*) as gender_cnt
-FROM sales
-WHERE branch = "C"
-GROUP BY gender
-ORDER BY gender_cnt DESC;
--- Gender per branch is more or less the same hence, I don't think has
--- an effect of the sales per branch and other factors.
-
--- Which time of the day do customers give most ratings?
-SELECT
-	time_of_day,
-	AVG(rating) AS avg_rating
-FROM sales
-GROUP BY time_of_day
-ORDER BY avg_rating DESC;
--- Looks like time of the day does not really affect the rating, its
--- more or less the same rating each time of the day.alter
-
-
--- Which time of the day do customers give most ratings per branch?
-SELECT
-	time_of_day,
-	AVG(rating) AS avg_rating
-FROM sales
-WHERE branch = "A"
-GROUP BY time_of_day
-ORDER BY avg_rating DESC;
--- Branch A and C are doing well in ratings, branch B needs to do a 
--- little more to get better ratings.
-
-
--- Which day fo the week has the best avg ratings?
-SELECT
-	day_name,
-	AVG(rating) AS avg_rating
-FROM sales
-GROUP BY day_name 
-ORDER BY avg_rating DESC;
--- Mon, Tue and Friday are the top best days for good ratings
--- why is that the case, how many sales are made on these days?
-
-
-
--- Which day of the week has the best average ratings per branch?
-SELECT 
-	day_name,
-	COUNT(day_name) total_sales
-FROM sales
-WHERE branch = "C"
-GROUP BY day_name
-ORDER BY total_sales DESC;
-
-
--- --------------------------------------------------------------------
--- --------------------------------------------------------------------
-
--- --------------------------------------------------------------------
--- ---------------------------- Sales ---------------------------------
--- --------------------------------------------------------------------
-
--- Number of sales made in each time of the day per weekday 
-SELECT
-	time_of_day,
-	COUNT(*) AS total_sales
-FROM sales
-WHERE day_name = "Sunday"
-GROUP BY time_of_day 
-ORDER BY total_sales DESC;
--- Evenings experience most sales, the stores are 
--- filled during the evening hours
-
--- Which of the customer types brings the most revenue?
-SELECT
-	customer_type,
-	SUM(total) AS total_revenue
+    customer_type,
+    AVG(total) AS avg_revenue_per_visit
 FROM sales
 GROUP BY customer_type
-ORDER BY total_revenue;
+ORDER BY avg_revenue_per_visit DESC;
 
--- Which city has the largest tax/VAT percent?
+
+-- Question 4.2: Gender-Product Line Loyalty
+-- For the most profitable product line, is there a significant gender preference?
+WITH TopProfitProduct AS (
+    SELECT product_line
+    FROM sales
+    GROUP BY product_line
+    ORDER BY SUM(gross_income) DESC
+    LIMIT 1
+)
 SELECT
-	city,
-    ROUND(AVG(tax_pct), 2) AS avg_tax_pct
+    gender,
+    COUNT(*) AS transaction_count,
+    SUM(total) AS total_spend
 FROM sales
-GROUP BY city 
-ORDER BY avg_tax_pct DESC;
+WHERE product_line = (SELECT product_line FROM TopProfitProduct)
+GROUP BY gender
+ORDER BY transaction_count DESC;
 
--- Which customer type pays the most in VAT?
+
+-- Question 4.3: Rating Driver
+-- Is there a correlation between the Average Customer Rating and the average
+-- Quantity purchased in a single transaction?
 SELECT
-	customer_type,
-	AVG(tax_pct) AS total_tax
+    rating,
+    AVG(quantity) AS avg_quantity_per_rating
 FROM sales
-GROUP BY customer_type
-ORDER BY total_tax;
+GROUP BY rating
+ORDER BY rating;
 
--- --------------------------------------------------------------------
--- --------------------------------------------------------------------
+
+-- Question 4.4: Rating Dip Analysis
+-- For Branch B, which combination of day and time yields the lowest average rating?
+SELECT
+    day_name,
+    time_of_day,
+    AVG(rating) AS avg_rating
+FROM sales
+WHERE branch = 'B'
+GROUP BY day_name, time_of_day
+ORDER BY avg_rating ASC
+LIMIT 1;
