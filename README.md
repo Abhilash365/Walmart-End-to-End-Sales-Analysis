@@ -1,12 +1,4 @@
-The questions listed are great for initial exploratory data analysis but tend to focus on simple facts and aggregates (e.g., "What is the total revenue by month?").
 
-To elevate the project to a deeper, more analytical and business-focused level, the questions should aim for **comparison, correlation, and strategic insight**.
-
-Here is a new, enhanced set of questions for your Walmart Sales Analysis project, structured into the same categories but focusing on "why" and "how" over simple "what."
-
-***
-
-## 🚀 New Strategic Analysis Questions
 
 ### 1. Generic (Location & Operational Efficiency)
 
