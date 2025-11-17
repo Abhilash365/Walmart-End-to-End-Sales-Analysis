@@ -1,13 +1,9 @@
 
+create database walmart;
 
--- Create database
-CREATE DATABASE walmartSales;
+DROP TABLE IF EXISTS sales;
 
--- Note: In psql, you would now connect to this database manually
--- or use the \c walmartSales meta-command.
-
--- Create table
-CREATE TABLE IF NOT EXISTS sales(
+CREATE TABLE IF NOT EXISTS sales (    
     invoice_id VARCHAR(30) NOT NULL PRIMARY KEY,
     branch VARCHAR(5) NOT NULL,
     city VARCHAR(30) NOT NULL,
@@ -16,65 +12,57 @@ CREATE TABLE IF NOT EXISTS sales(
     product_line VARCHAR(100) NOT NULL,
     unit_price DECIMAL(10,2) NOT NULL,
     quantity INT NOT NULL,
-    tax_pct NUMERIC(6,4) NOT NULL,        -- Changed from FLOAT
+    tax_pct NUMERIC(6,4) NOT NULL,
     total DECIMAL(12, 4) NOT NULL,
-    date TIMESTAMP NOT NULL,              -- Changed from DATETIME
-    "time" TIME NOT NULL,                 -- Quoted "time"
+    -- Corrected from DATETIME to TIMESTAMP
+    date TIMESTAMP NOT NULL, 
+    time TIME NOT NULL,
     payment VARCHAR(15) NOT NULL,
     cogs DECIMAL(10,2) NOT NULL,
-    gross_margin_pct NUMERIC(11,9),   -- Changed from FLOAT
+    gross_margin_pct NUMERIC(11,9),
     gross_income DECIMAL(12, 4),
-    rating NUMERIC(3, 1)              -- Changed from FLOAT
+    rating NUMERIC(2, 1)
 );
 
-
--- == SECTION 2: DATA LOADING (PostgreSQL Specific)
-
-
--- Use the COPY command to load data from a CSV file.
--- IMPORTANT: Update the 'file_path' to the actual, absolute path
--- where your 'WalmartSalesData.csv' file is located.
--- The PostgreSQL server user must have read access to this file.
-
--- COPY sales(invoice_id, branch, city, customer_type, gender, product_line, unit_price, quantity, tax_pct, total, date, "time", payment, cogs, gross_margin_pct, gross_income, rating)
--- FROM 'C:\your_path_here\WalmartSalesData.csv'
--- WITH (FORMAT CSV, HEADER);
-
--- == SECTION 3: DATA CLEANING & FEATURE ENGINEERING
+select * from sales limit 10;
 
 
--- Data cleaning check
-SELECT * FROM sales LIMIT 10;
+copy 'D:\analyst\WalmartSalesData.csv'
 
--- Add the time_of_day column
-ALTER TABLE sales ADD COLUMN time_of_day VARCHAR(20);
 
--- Note: "time" is quoted because it's a data type name
-UPDATE sales
-SET time_of_day = (
-    CASE
-        WHEN "time" BETWEEN '00:00:00' AND '12:00:00' THEN 'Morning'
-        WHEN "time" BETWEEN '12:01:00' AND '16:00:00' THEN 'Afternoon'
-        ELSE 'Evening'
-    END
+alter table sales
+add column time_of_day varchar(20);
+
+update sales
+set time_of_day=(
+  case 
+  when time between '00:00:00' and '12:00:00' then 'morning'
+  when time between '12:00:00'  and '16:00:00' then 'afternoon'
+  else 'Evening'
+  end
 );
 
--- Add day_name column
-ALTER TABLE sales ADD COLUMN day_name VARCHAR(10);
+select time_of_day ,time from sales;
+--add column day of week
 
--- Use TO_CHAR for PostgreSQL (DAYNAME is MySQL)
+alter table sales
+add column day_name varchar(10);
+
+update sales 
+set day_name=trim(to_Char(date,'day'));
+
 UPDATE sales
 SET day_name = TRIM(TO_CHAR(date, 'Day'));
 
--- Add month_name column
-ALTER TABLE sales ADD COLUMN month_name VARCHAR(10);
+-- update sales
+-- set day_name=NULL;
 
--- Use TO_CHAR for PostgreSQL (MONTHNAME is MySQL)
-UPDATE sales
-SET month_name = TRIM(TO_CHAR(date, 'Month'));
+alter table sales
+add column month_name varchar(10);
+update  sales
+set month_name=trim(to_Char(date,'month'));
 
--- == SECTION 4: GENERIC
-
+ select * from sales limit 10;
 
 -- How many unique cities does the data have?
 SELECT
@@ -87,9 +75,6 @@ SELECT
     branch
 FROM sales;
 
--- == SECTION 5: PRODUCT
-
-
 -- How many unique product lines does the data have?
 SELECT
     DISTINCT product_line
@@ -97,16 +82,8 @@ FROM sales;
 
 -- What is the most selling product line (first query)
 SELECT
-    SUM(quantity) as qty,
-    product_line
-FROM sales
-GROUP BY product_line
-ORDER BY qty DESC;
-
--- What is the most selling product line (duplicate query)
-SELECT
-    SUM(quantity) as qty,
-    product_line
+    product_line,
+    SUM(quantity) as qty
 FROM sales
 GROUP BY product_line
 ORDER BY qty DESC;
@@ -118,6 +95,8 @@ SELECT
 FROM sales
 GROUP BY month_name
 ORDER BY total_revenue;
+
+-- select distinct month_name from sales;
 
 -- What month had the largest COGS?
 SELECT
@@ -161,20 +140,23 @@ FROM sales;
 
 SELECT
     product_line,
-    CASE
-        WHEN AVG(quantity) > 6 THEN 'Good' -- Changed to single quotes
-        ELSE 'Bad'                         -- Changed to single quotes
-    END AS remark
-FROM sales
-GROUP BY product_line;
+  	avg(quantity) as avg_qty,
+	(select avg(quantity) from sales) as global_avg,
+	case 
+	when avg(quantity) > (select avg(quantity) from sales) then 'Good'
+	else 'Bad'
+	end as Remark
+from sales
+group by product_line;
+
 
 -- Which branch sold more products than average product sold?
 SELECT
     branch,
-    SUM(quantity) AS qnty
+    avg(quantity) AS qnty
 FROM sales
 GROUP BY branch
-HAVING SUM(quantity) > (SELECT AVG(quantity) FROM sales);
+HAVING avg(quantity)> (SELECT AVG(quantity) FROM sales);
 
 -- What is the most common product line by gender
 SELECT
@@ -183,7 +165,69 @@ SELECT
     COUNT(gender) AS total_cnt
 FROM sales
 GROUP BY gender, product_line
-ORDER BY total_cnt DESC;
+ORDER BY total_cnt DESC ;
+
+
+SELECT
+    gender,
+    product_line,
+    COUNT(*) AS total_count
+FROM sales
+GROUP BY
+    gender,
+    product_line
+ORDER BY
+    total_count DESC
+LIMIT 1;
+-- select gender,
+-- 		product_line,
+-- 		count(gender) as tnt_cnt
+-- from sales
+-- group by gender,product_line
+-- having count(gender)=(select max(count(gender) 
+-- from sales
+-- group by gender,product_line);
+
+with ranked_products as (
+select gender,
+		product_line,
+		count(gender) as total_count,
+		rank() over(partition by gender order by count(gender) desc) as rnk
+from sales
+group by gender,product_line
+
+)
+select gender,
+		product_line,
+		total_count
+from ranked_products
+where rnk=1;
+
+
+WITH RankedProducts AS (
+    SELECT
+        gender,
+        product_line,
+        COUNT(*) AS total_count,
+        -- Create a rank for each product line, partitioned by gender
+        RANK() OVER (
+            PARTITION BY gender
+            ORDER BY COUNT(*) DESC
+        ) AS rnk
+    FROM sales
+    GROUP BY
+        gender,
+        product_line
+)
+SELECT
+    gender,
+    product_line,
+    total_count
+FROM RankedProducts
+WHERE
+    rnk = 1;
+
+
 
 -- What is the average rating of each product line
 SELECT
@@ -192,9 +236,6 @@ SELECT
 FROM sales
 GROUP BY product_line
 ORDER BY avg_rating DESC;
-
--- == SECTION 6: CUSTOMERS
-
 
 -- How many unique customer types does the data have?
 SELECT
@@ -238,6 +279,15 @@ WHERE branch = 'C' -- Changed to single quotes
 GROUP BY gender
 ORDER BY gender_cnt DESC;
 
+SELECT
+    gender,
+	branch,
+    COUNT(gender) as gender_cnt
+FROM sales
+ -- Changed to single quotes
+GROUP BY gender,branch
+ORDER BY branch asc;
+
 -- Which time of the day do customers give most ratings?
 SELECT
     time_of_day,
@@ -246,13 +296,17 @@ FROM sales
 GROUP BY time_of_day
 ORDER BY avg_rating DESC;
 
+select distinct time_of_day from sales;
+
+
 -- Which time of the day do customers give most ratings per branch?
 SELECT
     time_of_day,
+	branch,
     AVG(rating) AS avg_rating
 FROM sales
-WHERE branch = 'A' -- Changed to single quotes
-GROUP BY time_of_day
+-- Changed to single quotes
+GROUP BY branch,time_of_day
 ORDER BY avg_rating DESC;
 
 -- Which day of the week has the best avg ratings?
@@ -272,9 +326,12 @@ WHERE branch = 'C' -- Changed to single quotes
 GROUP BY day_name
 ORDER BY total_sales DESC;
 
-
--- == SECTION 7: SALES
-
+select day_name,
+branch,
+		avg(rating) as avg_rating
+from sales
+group by day_name,branch
+order by avg_rating desc;
 
 -- Number of sales made in each time of the day per weekday
 SELECT
@@ -284,14 +341,6 @@ FROM sales
 WHERE day_name = 'Sunday' -- Changed to single quotes
 GROUP BY time_of_day
 ORDER BY total_sales DESC;
-
--- Which of the customer types brings the most revenue?
-SELECT
-    customer_type,
-    SUM(total) AS total_revenue
-FROM sales
-GROUP BY customer_type
-ORDER BY total_revenue;
 
 -- Which city has the largest tax/VAT percent?
 SELECT
